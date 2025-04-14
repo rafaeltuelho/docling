@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Iterable, Optional, Type, Union
+from typing import Iterable, Optional, Type, Union, List
 
 from PIL import Image
 
@@ -51,6 +51,22 @@ class PictureDescriptionApiModel(PictureDescriptionBaseModel):
             yield api_image_request(
                 image=image,
                 prompt=self.options.prompt,
+                url=self.options.url,
+                timeout=self.options.timeout,
+                headers=self.options.headers,
+                **self.options.params,
+            )
+
+    def _annotate_with_context(self, images: Iterable[Image.Image], contexts: List[str]) -> Iterable[str]:
+        # Note: technically we could make a batch request here,
+        # but not all APIs will allow for it. For example, vllm won't allow more than 1.
+        for image, context in zip(images, contexts):
+            # Create context-aware prompt
+            context_prompt = f"{context}\n\n{self.options.prompt}\nConsider the text context provided above when describing the image."
+            
+            yield api_image_request(
+                image=image,
+                prompt=context_prompt,
                 url=self.options.url,
                 timeout=self.options.timeout,
                 headers=self.options.headers,

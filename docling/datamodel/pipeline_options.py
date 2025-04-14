@@ -212,6 +212,7 @@ class OcrMacOptions(OcrOptions):
 class PictureDescriptionBaseOptions(BaseOptions):
     batch_size: int = 8
     scale: float = 2
+    text_context_window_size: int = 2  # Number of text items to consider before and after the image
 
     bitmap_area_threshold: float = (
         0.2  # percentage of the area for a bitmap to processed with the models

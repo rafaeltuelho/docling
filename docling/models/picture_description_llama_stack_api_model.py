@@ -102,9 +102,7 @@ class PictureDescriptionLlamaStackApiModel(PictureDescriptionBaseModel):
                         },
                         {
                             "type": "image",
-                            "image": {
-                                "data": image_base64
-                            },
+                            "image": {"data": image_base64},
                         },
                     ],
                 }
@@ -121,6 +119,53 @@ class PictureDescriptionLlamaStackApiModel(PictureDescriptionBaseModel):
                 json=payload,
                 timeout=self.options.timeout,
             )
+            if not r.ok:
+                _log.error(f"Error calling the API. Reponse was {r.text}")
+            r.raise_for_status()
+
+            api_resp = ApiResponse.model_validate_json(r.text)
+            generated_text = api_resp.completion_message.content.strip()
+            yield generated_text
+
+    def _annotate_with_context(self, images: Iterable[Image.Image], contexts: List[str]) -> Iterable[str]:
+        # Note: technically we could make a batch request here,
+        # but not all APIs will allow for it. For example, vllm won't allow more than 1.
+        for image, context in zip(images, contexts):
+            img_io = io.BytesIO()
+            image.save(img_io, "PNG")
+            image_base64 = base64.b64encode(img_io.getvalue()).decode("utf-8")
+
+            # Create context-aware message with surrounding text
+            context_prompt = f"{context}\n\n{self.options.prompt}\nConsider the text context provided above when describing the image."
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": context_prompt,
+                        },
+                        {
+                            "type": "image",
+                            "image": {"data": image_base64},
+                        },
+                    ],
+                }
+            ]
+
+            payload = {
+                "messages": messages,
+                **self.options.params,
+            }
+
+            r = requests.post(
+                str(self.options.url),
+                headers=self.options.headers,
+                json=payload,
+                timeout=self.options.timeout,
+            )
+
             if not r.ok:
                 _log.error(f"Error calling the API. Reponse was {r.text}")
             r.raise_for_status()

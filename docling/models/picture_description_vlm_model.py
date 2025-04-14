@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Iterable, Optional, Type, Union
+from typing import Iterable, Optional, Type, Union, List
 
 from PIL import Image
 
@@ -101,6 +101,42 @@ class PictureDescriptionVlmModel(PictureDescriptionBaseModel):
         # TODO: do batch generation
 
         for image in images:
+            # Prepare inputs
+            prompt = self.processor.apply_chat_template(
+                messages, add_generation_prompt=True
+            )
+            inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
+            inputs = inputs.to(self.device)
+
+            # Generate outputs
+            generated_ids = self.model.generate(
+                **inputs,
+                generation_config=GenerationConfig(**self.options.generation_config),
+            )
+            generated_texts = self.processor.batch_decode(
+                generated_ids[:, inputs["input_ids"].shape[1] :],
+                skip_special_tokens=True,
+            )
+
+            yield generated_texts[0].strip()
+
+    def _annotate_with_context(self, images: Iterable[Image.Image], contexts: List[str]) -> Iterable[str]:
+        from transformers import GenerationConfig
+
+        for image, context in zip(images, contexts):
+            # Create input messages with context
+            context_prompt = f"{context}\n\n{self.options.prompt}\nConsider the text context provided above when describing the image."
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": context_prompt},
+                    ],
+                },
+            ]
+
             # Prepare inputs
             prompt = self.processor.apply_chat_template(
                 messages, add_generation_prompt=True

@@ -10,7 +10,7 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
     PictureDescriptionApiOptions,
-    PictureDescriptionLlamaStackApiOptions
+    PictureDescriptionLlamaStackApiOptions,
 )
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
@@ -89,7 +89,7 @@ def main():
 
     # The PictureDescriptionApiOptions() allows to interface with APIs supporting
     # the multi-modal chat interface. Here follow a few example on how to configure those.
-    # 
+    #
     # One possibility is self-hosting model, e.g. via VLLM.
     # $ vllm serve MODEL_NAME
     # Then PictureDescriptionApiOptions can point to the localhost endpoint.
