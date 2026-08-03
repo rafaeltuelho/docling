@@ -34,7 +34,7 @@ Do not edit product code or tests during this stage.
    architecture. Call out anything that is obsolete or unresolved.
 4. Propose the smallest coherent vertical slice. Avoid dead scaffolding that is
    tested only for its own sake.
-5. Write the result to `demo/deepseek-ocr/implementation-plan.md` using its
+5. Write the result to `.plans/active/deepseek-ocr.md` using its
    template. Leave its status as `Proposed`.
 6. Stop and ask for human approval.
 
@@ -87,6 +87,15 @@ Review the final diff against:
 
 Resolve findings when they stay within the approved plan. Otherwise record them
 as follow-up work and request a new approval before expanding scope.
+
+## Plan lifecycle
+
+- Create or update the implementation plan under `.plans/active/`.
+- Keep the plan active throughout implementation, validation, and review.
+- The agent must not approve its own plan.
+- Scope expansion requires updating the plan and returning to human approval.
+- Move the plan to `.plans/completed/` only after validation and handoff.
+- Move abandoned or superseded plans to `.plans/archived/`.
 
 ## 5. Hand off
 

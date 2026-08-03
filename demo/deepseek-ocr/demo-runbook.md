@@ -15,7 +15,7 @@ Start a new Cursor Agent conversation with:
 > Read `@demo/deepseek-ocr/task-brief.md` and use
 > `@.agents/skills/docling-contribution-workflow/SKILL.md`. Run only the Plan
 > stage. Inspect current Docling code and tests, then write the proposed plan to
-> `@demo/deepseek-ocr/implementation-plan.md`. Do not edit product code.
+> `@.plans/active/deepseek-ocr.md`. Do not edit product code.
 
 Review the proposed architecture, file boundary, tests, and unresolved questions.
 Ask Cursor to revise the plan if needed.

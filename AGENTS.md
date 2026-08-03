@@ -76,7 +76,7 @@ contribution workflow demo:
 
 1. Follow `.agents/skills/docling-contribution-workflow/SKILL.md`.
 2. Treat files under `demo/deepseek-ocr/` as workflow evidence, not product code.
-3. Do not edit Docling source until `demo/deepseek-ocr/implementation-plan.md`
+3. Do not edit Docling source until `.plans/active/deepseek-ocr.md`
    has been explicitly marked `Approved` by a human.
 4. Never report GPU, model-download, or end-to-end validation as passed unless
    the command actually ran in a compatible environment.
