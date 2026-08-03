@@ -68,3 +68,15 @@ Run `make validate` before considering a task complete. If hooks modify files,
 review the changes and rerun `make validate` until it passes cleanly. Also run
 the affected tests for the files or behavior you changed. Use `make check` when
 you need a read-only verification pass.
+
+## Contributor workflow demo
+
+When a task references `demo/deepseek-ocr/task-brief.md` or asks to run the
+contribution workflow demo:
+
+1. Follow `.agents/skills/docling-contribution-workflow/SKILL.md`.
+2. Treat files under `demo/deepseek-ocr/` as workflow evidence, not product code.
+3. Do not edit Docling source until `demo/deepseek-ocr/implementation-plan.md`
+   has been explicitly marked `Approved` by a human.
+4. Never report GPU, model-download, or end-to-end validation as passed unless
+   the command actually ran in a compatible environment.
