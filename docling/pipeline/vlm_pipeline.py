@@ -62,7 +62,10 @@ from docling.models.vlm_pipeline_models.hf_transformers_model import (
 )
 from docling.models.vlm_pipeline_models.mlx_model import HuggingFaceMlxModel
 from docling.pipeline.base_pipeline import PaginatedPipeline
-from docling.utils.deepseekocr_utils import parse_deepseekocr_markdown
+from docling.utils.deepseekocr_utils import (
+    DEEPSEEK_OCR_FORMAT_ERROR,
+    _parse_deepseekocr_markdown_with_diagnostics,
+)
 from docling.utils.profiling import ProfilingScope, TimeRecorder
 
 _log = logging.getLogger(__name__)
@@ -259,6 +262,14 @@ class VlmPipeline(PaginatedPipeline):
                 VlmStopReason.LENGTH,
                 VlmStopReason.CONTENT_FILTERED,
             ):
+                # DeepSeek unparseable pages already include stop-reason context
+                # on their single parser-format error; do not append a second one.
+                if any(
+                    err.page_no == page.page_no
+                    and err.error_message.startswith(DEEPSEEK_OCR_FORMAT_ERROR)
+                    for err in conv_res.errors
+                ):
+                    continue
                 conv_res.errors.append(
                     ErrorItem(
                         component_type=DoclingComponentType.PIPELINE,
@@ -500,26 +511,51 @@ class VlmPipeline(PaginatedPipeline):
         - figure: Image-based elements or diagrams
         - figure_caption: Titles or descriptions for figures/images
         - header / footer: Content at top or bottom margins of pages
+
+        Missing predictions are reported only by ``_determine_status``. Blank
+        predictions remain empty successful pages. Nonblank responses with zero
+        retained annotations append exactly one DeepSeek format
+        ``INFERENCE_FAILURE`` and mark ``PARTIAL_SUCCESS``.
         """
         page_docs = []
 
         for pg_idx, page in enumerate(conv_res.pages):
+            # Missing predictions stay empty here; `_determine_status` owns that error.
             predicted_text = ""
-            if page.predictions.vlm_response:
+            if page.predictions.vlm_response is not None:
                 predicted_text = page.predictions.vlm_response.text
 
             assert page.size is not None
 
-            # Parse single page using the utility function
-            # Pass vlm_options.scale to convert bboxes from scaled image coords to original PDF coords
-            page_doc = parse_deepseekocr_markdown(
+            diagnostics = _parse_deepseekocr_markdown_with_diagnostics(
                 content=predicted_text,
                 original_page_size=page.size,
                 page_no=pg_idx + 1,
                 filename=conv_res.input.file.name or "file",
                 page_image=page.image,
             )
-            page_docs.append(page_doc)
+            if diagnostics.format_error is not None:
+                error_message = DEEPSEEK_OCR_FORMAT_ERROR
+                vlm_response = page.predictions.vlm_response
+                if vlm_response is not None and vlm_response.stop_reason in (
+                    VlmStopReason.LENGTH,
+                    VlmStopReason.CONTENT_FILTERED,
+                ):
+                    error_message = (
+                        f"{DEEPSEEK_OCR_FORMAT_ERROR} "
+                        f"(stop_reason={vlm_response.stop_reason.value})."
+                    )
+                conv_res.errors.append(
+                    ErrorItem(
+                        component_type=DoclingComponentType.PIPELINE,
+                        module_name=self.__class__.__name__,
+                        error_message=error_message,
+                        category=FailureCategory.INFERENCE_FAILURE,
+                        page_no=page.page_no,
+                    )
+                )
+                conv_res.status = ConversionStatus.PARTIAL_SUCCESS
+            page_docs.append(diagnostics.document)
 
         # Add page metadata and concatenate
         return self._add_page_metadata_and_concatenate(page_docs, conv_res)

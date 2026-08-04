@@ -1,7 +1,10 @@
 """Utilities for parsing DeepSeek OCR annotated markdown format."""
 
+from __future__ import annotations
+
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from docling_core.types.doc import (
@@ -14,109 +17,48 @@ from docling_core.types.doc import (
     ProvenanceItem,
     RefItem,
     Size,
-    TableCell,
-    TableData,
     TextItem,
 )
-from lxml import etree
 from PIL import Image as PILImage
+
+from docling.utils.chandra_utils import _parse_table_html
 
 _log = logging.getLogger(__name__)
 
+DEEPSEEK_OCR_FORMAT_ERROR = (
+    "DeepSeek OCR grounded-markdown parse failure: no valid annotations retained."
+)
 
-def _parse_table_html(html_content: str) -> TableData:
-    """Parse HTML table content and create TableData structure.
+_LABEL_MAP: dict[str, DocItemLabel] = {
+    "text": DocItemLabel.TEXT,
+    "title": DocItemLabel.TITLE,
+    "sub_title": DocItemLabel.SECTION_HEADER,
+    "table": DocItemLabel.TABLE,
+    "table_caption": DocItemLabel.CAPTION,
+    "figure": DocItemLabel.PICTURE,
+    "figure_caption": DocItemLabel.CAPTION,
+    "image": DocItemLabel.PICTURE,
+    "image_caption": DocItemLabel.CAPTION,
+    "header": DocItemLabel.PAGE_HEADER,
+    "footer": DocItemLabel.PAGE_FOOTER,
+}
 
-    Args:
-        html_content: HTML string containing <table> element
+# Pattern to match: <|ref|>label<|/ref|><|det|>[[...]]<|/det|> or label[[...]].
+# Capture the full payload; arity/numeric validation happens in
+# `_parse_coordinate_payload`.
+_ANNOTATION_PATTERN = (
+    r"^(?:<\|ref\|>)?(\w+)(?:<\|/ref\|>)?(?:<\|det\|>)?\[\[([^\]]*)\]\]"
+    r"(?:<\|/det\|>)?\s*$"
+)
 
-    Returns:
-        TableData with parsed table structure
-    """
-    # Extract table HTML if wrapped in other content
-    table_match = re.search(
-        r"<table[^>]*>.*?</table>", html_content, re.DOTALL | re.IGNORECASE
-    )
-    if not table_match:
-        # No table found, return empty table
-        return TableData(num_rows=0, num_cols=0, table_cells=[])
 
-    table_html = table_match.group(0)
+@dataclass
+class DeepSeekOcrParseDiagnostics:
+    """Internal parse result consumed by VlmPipeline."""
 
-    try:
-        # Parse HTML with lxml
-        parser = etree.HTMLParser()
-        tree = etree.fromstring(table_html, parser)
-
-        # Find all rows
-        rows = tree.xpath(".//tr")
-        if not rows:
-            return TableData(num_rows=0, num_cols=0, table_cells=[])
-
-        # Calculate grid dimensions
-        num_rows = len(rows)
-        num_cols = 0
-
-        # First pass: determine number of columns
-        for row in rows:
-            cells = row.xpath("./td | ./th")
-            col_count = 0
-            for cell in cells:
-                colspan = int(cell.get("colspan", "1"))
-                col_count += colspan
-            num_cols = max(num_cols, col_count)
-
-        # Create grid to track cell positions
-        grid: list[list[Union[None, str]]] = [
-            [None for _ in range(num_cols)] for _ in range(num_rows)
-        ]
-        table_data = TableData(num_rows=num_rows, num_cols=num_cols, table_cells=[])
-
-        # Second pass: populate cells
-        for row_idx, row in enumerate(rows):
-            cells = row.xpath("./td | ./th")
-            col_idx = 0
-
-            for cell in cells:
-                # Find next available column
-                while col_idx < num_cols and grid[row_idx][col_idx] is not None:
-                    col_idx += 1
-
-                if col_idx >= num_cols:
-                    break
-
-                # Get cell properties
-                text = "".join(cell.itertext()).strip()
-                colspan = int(cell.get("colspan", "1"))
-                rowspan = int(cell.get("rowspan", "1"))
-                is_header = cell.tag.lower() == "th"
-
-                # Mark grid cells as occupied
-                for r in range(row_idx, min(row_idx + rowspan, num_rows)):
-                    for c in range(col_idx, min(col_idx + colspan, num_cols)):
-                        grid[r][c] = text
-
-                # Create table cell
-                table_cell = TableCell(
-                    text=text,
-                    row_span=rowspan,
-                    col_span=colspan,
-                    start_row_offset_idx=row_idx,
-                    end_row_offset_idx=row_idx + rowspan,
-                    start_col_offset_idx=col_idx,
-                    end_col_offset_idx=col_idx + colspan,
-                    column_header=is_header and row_idx == 0,
-                    row_header=is_header and col_idx == 0,
-                )
-                table_data.table_cells.append(table_cell)
-
-                col_idx += colspan
-
-        return table_data
-
-    except Exception as e:
-        _log.warning(f"Failed to parse table HTML: {e}")
-        return TableData(num_rows=0, num_cols=0, table_cells=[])
+    document: DoclingDocument
+    warnings: list[str] = field(default_factory=list)
+    format_error: str | None = None
 
 
 def _collect_annotation_content(
@@ -228,6 +170,154 @@ def _process_annotation_item(
         page_doc.add_text(label=doc_label, text=content, prov=prov)
 
 
+def _parse_coordinate_payload(
+    coords_str: str,
+) -> tuple[list[float] | None, str | None]:
+    """Parse an annotation coordinate payload into four floats.
+
+    Returns:
+        (coords, warning). coords is None when the payload is malformed.
+    """
+    try:
+        coords = [float(x.strip()) for x in coords_str.split(",")]
+    except ValueError:
+        return None, f"Skipping annotation with non-numeric coordinates: {coords_str!r}"
+
+    if len(coords) != 4:
+        return (
+            None,
+            f"Skipping annotation with malformed coordinates "
+            f"(expected 4 values, got {len(coords)}): {coords_str!r}",
+        )
+    return coords, None
+
+
+def _parse_deepseekocr_markdown_with_diagnostics(
+    content: str,
+    original_page_size: Size,
+    page_no: int,
+    filename: str = "file",
+    page_image: Optional[PILImage.Image] = None,
+) -> DeepSeekOcrParseDiagnostics:
+    """Parse DeepSeek OCR markdown and return document plus diagnostics."""
+    warnings: list[str] = []
+    label_map = _LABEL_MAP
+
+    origin = DocumentOrigin(
+        filename=filename,
+        mimetype="text/markdown",
+        binary_hash=0,
+    )
+    page_doc = DoclingDocument(name=filename.rsplit(".", 1)[0], origin=origin)
+
+    pg_width = original_page_size.width
+    pg_height = original_page_size.height
+    scale_x = pg_width / 1000
+    scale_y = pg_height / 1000
+
+    image_dpi = 72
+    if page_image is not None:
+        image_dpi = int(72 * page_image.width / pg_width)
+
+    page_doc.add_page(
+        page_no=page_no,
+        size=Size(width=pg_width, height=pg_height),
+        image=ImageRef.from_pil(image=page_image, dpi=image_dpi)
+        if page_image
+        else None,
+    )
+
+    lines = content.split("\n")
+    annotations: list[tuple[str, str, ProvenanceItem]] = []
+    i = 0
+    visited_lines: set[int] = set()
+
+    while i < len(lines):
+        if i in visited_lines:
+            i += 1
+            continue
+
+        line = lines[i].strip()
+        match = re.match(_ANNOTATION_PATTERN, line)
+        if match:
+            label_str = match.group(1)
+            coords_str = match.group(2)
+            coords, coord_warning = _parse_coordinate_payload(coords_str)
+            if coords is None:
+                if coord_warning is not None:
+                    warnings.append(coord_warning)
+                    _log.warning(coord_warning)
+                i += 1
+                continue
+
+            if label_str not in label_map:
+                warning = (
+                    f"Unknown DeepSeek OCR grounded label {label_str!r}; "
+                    "falling back to TEXT."
+                )
+                warnings.append(warning)
+                _log.warning(warning)
+
+            bbox = BoundingBox(
+                l=coords[0] * scale_x,
+                t=coords[1] * scale_y,
+                r=coords[2] * scale_x,
+                b=coords[3] * scale_y,
+                coord_origin=CoordOrigin.TOPLEFT,
+            )
+            prov = ProvenanceItem(page_no=page_no, bbox=bbox, charspan=[0, 0])
+
+            i += 1
+            content_text, i = _collect_annotation_content(
+                lines, i, label_str, _ANNOTATION_PATTERN, visited_lines
+            )
+            annotations.append((label_str, content_text, prov))
+            continue
+        i += 1
+
+    for idx, (label_str, content_text, prov) in enumerate(annotations):
+        caption_item = None
+        if label_str in ["table", "figure", "image"] and idx + 1 < len(annotations):
+            next_label, next_content, next_prov = annotations[idx + 1]
+            if (
+                (label_str == "table" and next_label == "table_caption")
+                or (label_str == "figure" and next_label == "figure_caption")
+                or (label_str == "image" and next_label == "image_caption")
+            ):
+                caption_label = label_map.get(next_label, DocItemLabel.CAPTION)
+                caption_item = page_doc.add_text(
+                    label=caption_label,
+                    text=next_content,
+                    prov=next_prov,
+                )
+
+        if label_str in ["figure_caption", "table_caption", "image_caption"]:
+            if idx > 0:
+                prev_label = annotations[idx - 1][0]
+                if (
+                    (label_str == "table_caption" and prev_label == "table")
+                    or (label_str == "figure_caption" and prev_label == "figure")
+                    or (label_str == "image_caption" and prev_label == "image")
+                ):
+                    continue
+
+        _process_annotation_item(
+            label_str, content_text, prov, caption_item, page_doc, label_map
+        )
+
+    format_error: str | None = None
+    if content.strip() and len(annotations) == 0:
+        format_error = DEEPSEEK_OCR_FORMAT_ERROR
+        warnings.append(format_error)
+        _log.warning(format_error)
+
+    return DeepSeekOcrParseDiagnostics(
+        document=page_doc,
+        warnings=warnings,
+        format_error=format_error,
+    )
+
+
 def parse_deepseekocr_markdown(
     content: str,
     original_page_size: Size,
@@ -260,130 +350,10 @@ def parse_deepseekocr_markdown(
     Returns:
         DoclingDocument with parsed content
     """
-    # Label mapping
-    label_map = {
-        "text": DocItemLabel.TEXT,
-        "title": DocItemLabel.TITLE,
-        "sub_title": DocItemLabel.SECTION_HEADER,
-        "table": DocItemLabel.TABLE,
-        "table_caption": DocItemLabel.CAPTION,
-        "figure": DocItemLabel.PICTURE,
-        "figure_caption": DocItemLabel.CAPTION,
-        "image": DocItemLabel.PICTURE,
-        "image_caption": DocItemLabel.CAPTION,
-        "header": DocItemLabel.PAGE_HEADER,
-        "footer": DocItemLabel.PAGE_FOOTER,
-    }
-
-    # Pattern to match: <|ref|>label<|/ref|><|det|>[[x1, y1, x2, y2]]<|/det|> or label[[x1, y1, x2, y2]]
-    annotation_pattern = r"^(?:<\|ref\|>)?(\w+)(?:<\|/ref\|>)?(?:<\|det\|>)?\[\[([0-9., ]+)\]\](?:<\|/det\|>)?\s*$"
-
-    # Create a new document
-    origin = DocumentOrigin(
-        filename=filename,
-        mimetype="text/markdown",
-        binary_hash=0,
-    )
-    page_doc = DoclingDocument(name=filename.rsplit(".", 1)[0], origin=origin)
-
-    # Get page dimensions - use original page size if provided, otherwise image size
-    pg_width = original_page_size.width
-    pg_height = original_page_size.height
-
-    # Calculate scale factor for bbox conversion
-    # VLM produces bboxes in unit of 1000
-    scale_x = pg_width / 1000
-    scale_y = pg_height / 1000
-
-    # Calculate DPI for the image
-    image_dpi = 72
-    if page_image is not None:
-        image_dpi = int(72 * page_image.width / pg_width)
-
-    # Add page metadata
-    page_doc.add_page(
+    return _parse_deepseekocr_markdown_with_diagnostics(
+        content=content,
+        original_page_size=original_page_size,
         page_no=page_no,
-        size=Size(width=pg_width, height=pg_height),
-        image=ImageRef.from_pil(image=page_image, dpi=image_dpi)
-        if page_image
-        else None,
-    )
-
-    # Split into lines and parse - collect all annotations first
-    lines = content.split("\n")
-    annotations = []
-    i = 0
-    visited_lines: set[int] = set()
-
-    while i < len(lines):
-        if i in visited_lines:
-            i += 1
-            continue
-
-        line = lines[i].strip()
-        match = re.match(annotation_pattern, line)
-        if match:
-            label_str = match.group(1)
-            coords_str = match.group(2)
-
-            try:
-                coords = [float(x.strip()) for x in coords_str.split(",")]
-                if len(coords) == 4:
-                    # Scale bounding box from image coordinates to original page coordinates
-                    bbox = BoundingBox(
-                        l=coords[0] * scale_x,
-                        t=coords[1] * scale_y,
-                        r=coords[2] * scale_x,
-                        b=coords[3] * scale_y,
-                        coord_origin=CoordOrigin.TOPLEFT,
-                    )
-                    prov = ProvenanceItem(page_no=page_no, bbox=bbox, charspan=[0, 0])
-
-                    # Get the content (next non-empty line)
-                    i += 1
-                    content_text, i = _collect_annotation_content(
-                        lines, i, label_str, annotation_pattern, visited_lines
-                    )
-                    annotations.append((label_str, content_text, prov))
-                    continue
-            except (ValueError, IndexError):
-                pass
-        i += 1
-
-    # Process annotations and link captions that appear AFTER tables/figures
-    for idx, (label_str, content_text, prov) in enumerate(annotations):
-        # Check if NEXT annotation is a caption for this table/figure/image
-        # (caption appears AFTER table in the file: table[[...]] then table_caption[[...]])
-        caption_item = None
-        if label_str in ["table", "figure", "image"] and idx + 1 < len(annotations):
-            next_label, next_content, next_prov = annotations[idx + 1]
-            if (
-                (label_str == "table" and next_label == "table_caption")
-                or (label_str == "figure" and next_label == "figure_caption")
-                or (label_str == "image" and next_label == "image_caption")
-            ):
-                # Create caption item
-                caption_label = label_map.get(next_label, DocItemLabel.CAPTION)
-                caption_item = page_doc.add_text(
-                    label=caption_label,
-                    text=next_content,
-                    prov=next_prov,
-                )
-
-        # Skip if this is a caption that was already processed
-        if label_str in ["figure_caption", "table_caption", "image_caption"]:
-            if idx > 0:
-                prev_label = annotations[idx - 1][0]
-                if (
-                    (label_str == "table_caption" and prev_label == "table")
-                    or (label_str == "figure_caption" and prev_label == "figure")
-                    or (label_str == "image_caption" and prev_label == "image")
-                ):
-                    continue
-
-        # Add the item
-        _process_annotation_item(
-            label_str, content_text, prov, caption_item, page_doc, label_map
-        )
-
-    return page_doc
+        filename=filename,
+        page_image=page_image,
+    ).document

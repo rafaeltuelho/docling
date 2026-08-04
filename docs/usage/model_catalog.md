@@ -242,7 +242,7 @@ object-detection path — but selecting `DOCLING_LAYOUT_V2` warns and falls back
 |-----------|-------|------------|--------------|-----|-------------------------|------|---------------|
 | `granite_docling` | Granite-Docling-258M | 258M | ✅ | ✅ | Ollama | ❌ | DocTags |
 | `smoldocling` | SmolDocling-256M | 256M | ✅ | ✅ | ❌ | ❌ | DocTags |
-| `deepseek_ocr` | DeepSeek-OCR-3B | 3B | ❌ | ❌ | Ollama<br/>LM Studio | ❌ | Markdown |
+| `deepseek_ocr` | DeepSeek-OCR-3B | 3B | ❌ | ❌ | Ollama<br/>LM Studio | ❌ | Markdown (grounded; nonblank unparseable output → `partial_success` / `INFERENCE_FAILURE`) |
 | `granite_vision` | Granite-Vision-3.3-2B | 2B | ✅ | ❌ | Ollama<br/>LM Studio | ✅ | Markdown |
 | `pixtral` | Pixtral-12B | 12B | ✅ | ✅ | ❌ | ❌ | Markdown |
 | `got_ocr` | GOT-OCR-2.0 | - | ✅ | ❌ | ❌ | ❌ | Markdown |

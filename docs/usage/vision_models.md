@@ -131,3 +131,24 @@ Many remote inference services are provided, the key requirement is to offer an 
 More examples on how to connect with the remote inference services can be found in the following examples:
 
 - [vlm_pipeline_api_model.py](./../examples/vlm_pipeline_api_model.py)
+
+### DeepSeek-OCR (API-only grounded Markdown)
+
+The `deepseek_ocr` preset is API-only (Ollama / LM Studio). It uses a fixed
+grounding prompt and parses DeepSeek grounded-markdown annotations into a
+`DoclingDocument`.
+
+Failure semantics for this response format:
+
+- **Missing VLM prediction:** reported as `partial_success` with an
+  `INFERENCE_FAILURE` (“No VLM prediction.”), same as other VLM presets.
+- **Blank prediction text:** treated as an empty successful page. Blank source
+  pages cannot be distinguished from empty model output without additional
+  signals; truncated or filtered generations still surface through VLM stop
+  reasons (`LENGTH`, `CONTENT_FILTERED`).
+- **Nonblank text with no valid grounded annotations:** reported as
+  `partial_success` with exactly one `INFERENCE_FAILURE` naming a DeepSeek OCR
+  grounded-markdown parse failure.
+- **Unknown grounded labels:** retained as ordinary text (`TEXT`).
+- **Malformed coordinates** (not exactly four numeric values): that annotation
+  is skipped; valid siblings are kept.
