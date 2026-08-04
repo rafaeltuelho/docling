@@ -353,40 +353,70 @@ performed while authoring this plan.
 ## Human approval
 
 - Approved by: Rafael Soares (maintainer proxy)
-
 - Approved at: 2026-08-04
-
 - Approved scope changes:
-
   - Confirmed VLM API hardening as the first implementation slice.
-
   - Approved only the files and behavior listed in the change boundary.
-
   - No additional scope was authorized.
 
 - Notes:
-
   - Approved the locked parser API and input/outcome matrix.
-
   - Blank-but-present predictions retain the existing empty-page behavior.
-
   - Unknown labels remain preserved as TEXT.
-
   - Missing predictions are handled only by `_determine_status`.
-
-  - Nonblank output with zero retained annotations produces exactly one
-
-    INFERENCE_FAILURE.
-
+  - Nonblank output with zero retained annotations produces exactly one INFERENCE_FAILURE.
   - Core parser, pipeline, dependency, and documentation validation is required.
-
   - Live Ollama validation is optional and must be reported as skipped if unavailable.
-
   - Legacy module-level Transformers imports and a full minimal-install
-
-    VlmPipeline smoke test are accepted as documented, pre-existing limitations
-
-    outside this slice.
-
+    VlmPipeline smoke test are accepted as documented, pre-existing limitations outside this slice.
   - Any scope expansion requires plan revision and renewed approval.
 
+## Human completion decision
+
+- Accepted by: Rafael Soares (maintainer proxy for demonstration)
+- Accepted at: 2026-08-04
+- Independent review outcome: Passed after one correction cycle
+- Outstanding findings: None
+- Disposition: PR-ready
+- Qualified validation:
+  - Core DeepSeek-OCR tests: 16 passed
+  - External Ollama test: skipped because Ollama was unavailable
+  - Pytest marker validation: passed
+  - Repository check: blocked only by three verified pre-existing,
+    unchanged max-lines violations
+- Unverified:
+  - Live conversion with deepseek-ocr:3b
+  - Actual Ollama model-presence behavior
+- Decision:
+  - The implementation matches the approved plan.
+  - The unverified live-service checks are accepted as non-blocking under
+    the approved validation policy.
+  - Any subsequent implementation change requires renewed review.
+
+## Final handoff disposition
+
+- Handoff completed at: 2026-08-04
+- Stakeholder report: `demo/deepseek-ocr/change-report.md`
+- Plan archive location after handoff: `.plans/completed/deepseek-ocr.md`
+- Product/test code was not modified during handoff
+- No commit, push, or PR was created during handoff
+
+### Final validation record (observed)
+
+| Command | Result |
+|---|---|
+| `git diff --check` | Passed (exit 0) |
+| `uv run pytest tests/test_deepseekocr_vlm.py -v` | Passed — 16 passed |
+| `uv run pytest tests/test_deepseekocr_vlm_external.py -v -rs` | Skipped — `Ollama is not available` |
+| `uv run python .github/scripts/pytest_marker_selection.py core-ignore-args` | Passed — ignores `tests/test_deepseekocr_vlm_external.py`; core DeepSeek module not ignored |
+| `make validate` | Passed on clean rerun (first run failed only because Ruff formatter mutated one test file) |
+| `make check` | Failed — pre-existing max-lines on unrelated files (`docling/backend/mspowerpoint_backend.py`, `docling/backend/xml/jats_backend.py`, `docling/datamodel/document.py`) |
+| CUDA / local Transformers DeepSeek | Not run (out of approved scope) |
+| MPS | Not run (out of approved scope) |
+
+### Review disposition
+
+- Planning review: plan revised until approval-ready; human approved.
+- Implementation review pass 1: four accepted P2 findings corrected in-scope.
+- Implementation review pass 2: no new findings; human accepted as PR-ready.
+- Outstanding actionable findings: none.
